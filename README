@@ -1,3 +1,159 @@
+UN1CA sm7125 kernel: KernelSU-Next + security fixes
+===================================================
+
+This is the UN1CA Android ROM kernel for the Samsung sm7125 platform
+(a52q / a72q = Galaxy A52 / A72), Linux 4.14.357-openela, branch "sixteen".
+On top of the stock tree it adds, entirely through scripts so the result is
+reproducible by re-running them:
+
+  * KernelSU-Next (root), pinned to the v3.1.0-legacy line that supports this
+    non-GKI 4.14 kernel, applied as manual hooks.
+  * Backports of two security fixes the tree does not have yet: Dirty Frag
+    (CVE-2026-43284) and Fragnesia (CVE-2026-46300).
+  * A flashable boot.img and a repacked, signed UN1CA ROM ZIP.
+  * A separate, userspace-only KernelSU module that fixes USB file transfer
+    (MTP) being dead after a fresh boot on UN1CA.
+
+Nothing edits the kernel or KernelSU-Next source in place: every change is an
+embedded patch an "apply" script lays on the working tree and can revert. The
+only thing any script downloads is KernelSU-Next itself (and, optionally, a
+prebuilt ramdisk). The build environment is NOT installed by these scripts;
+they only check for it and tell you the apt command to run if something is
+missing.
+
+
+Layout
+------
+
+  apply_ksu.sh             Add / check / remove KernelSU-Next (manual hooks).
+  apply_security_fixes.sh  Add / check / remove the CVE backports.
+  build_kernel.sh          Build the tree as it currently is -> dist/<device>/.
+  build_all.sh             apply_ksu + apply_security_fixes + build, then
+                           revert whatever it applied. One command, clean tree.
+  patch_rom_zip.sh         Build the kernel and repack it into a signed UN1CA
+                           flashable ROM ZIP.
+  build_usb_fix_module.sh  Generate the USB-boot-fix KernelSU module ZIP.
+  tests/skb_coalesce/      Normal-path functional test (kernel module) for the
+                           Fragnesia skb_try_coalesce() change.
+  test-keys/               AOSP public test key used for signing. Stored here
+                           on purpose; the scripts never download keys.
+  dist/                    Build outputs (git-ignored except usb-boot-fix/).
+
+Run every script from the top of the kernel tree. Each takes -h / --help.
+
+
+Build environment (install once, machine-wide)
+----------------------------------------------
+
+The scripts assume a Debian/Ubuntu host and install nothing. If anything is
+missing they stop and print the exact apt line. The dependencies are, from the
+official Debian repositories:
+
+  sudo apt install git make python3 bc bison flex perl clang lld llvm \
+                   mkbootimg openssl libssl-dev zip signapk
+
+  * git make python3 bc bison flex perl clang lld llvm libssl-dev  - kernel build
+  * mkbootimg openssl                                              - boot.img pack + AVB signing
+  * signapk openssl                                                - ROM ZIP signing (patch_rom_zip.sh)
+  * zip                                                            - USB fix module (build_usb_fix_module.sh)
+
+The test key lives in test-keys/ (download it once yourself if it is absent;
+see test-keys/README). It is the public AOSP test key, used to re-sign the
+things UN1CA signs with its own non-public key, so a self-built image verifies.
+
+
+Building
+--------
+
+Everything, in one go (KernelSU-Next + security fixes), then a clean tree:
+
+  ./build_all.sh --device both --ramdisk download
+
+  --device    a52q | a72q | both      (asked if omitted)
+  --ramdisk   extract | download | skip
+                extract   pull the ramdisk, version string, patch level and
+                          layout from a stock boot.img you provide with
+                          --boot-img <dev>=<path>
+                download  fetch a prebuilt ramdisk
+                skip      no ramdisk (kernel-only Image)
+  --ksu-ref <ref>   build a specific KernelSU-Next commit / tag / branch
+  --clean           wipe out/ first
+
+Output lands in dist/<device>/ : boot.img (signed, flashable), Image,
+dtbo.img, kernel.release. The kernel version string (uname -r) always ends in
+"-g<commit>" so a build is identifiable and never collides with stock.
+
+Finer control - do the steps yourself:
+
+  ./apply_ksu.sh                      # add KernelSU-Next to the working tree
+  ./apply_security_fixes.sh           # add the CVE backports
+  ./build_kernel.sh --device a52q --ramdisk download
+  ./apply_security_fixes.sh --revert  # undo (any order)
+  ./apply_ksu.sh --revert
+
+  ./apply_ksu.sh --status             # exit 0 = applied, 3 = not
+  ./apply_security_fixes.sh --status  # per-fix state; a fix the tree already
+                                      # carries is detected and skipped
+
+build_kernel.sh builds the tree exactly as it is, so apply only what you want
+in a given image. build_all.sh is the convenience wrapper that applies both,
+builds, and reverts on exit (leaving anything you had applied beforehand).
+
+
+Repacking a flashable ROM ZIP
+-----------------------------
+
+To drop the patched kernel into a UN1CA flashable ZIP (only boot.img is
+replaced; every other entry is copied and CRC-checked, then the ZIP is signed
+with the test key and verified):
+
+  ./patch_rom_zip.sh UN1CA_3.2.1-..._a52q-sign.zip
+
+It reads the device from the ZIP, extracts its boot.img, has build_all.sh
+build against it, and writes dist/<name>-ksu.zip. Use --as-is to package the
+tree as it currently is (whatever you applied yourself) instead of the full
+KSU + fixes set; its output name ends in -custom. See --help for -o / --clean.
+
+
+USB file-transfer (MTP) boot fix
+--------------------------------
+
+On UN1CA, USB is charge-only after a fresh boot with every mode option greyed
+out; toggling USB debugging "kicks" it and it works until the next reboot. The
+gadget simply never binds its UDC at boot (the boot config includes adb but
+FunctionFS isn't ready, and UsbDeviceManager never retries). This is a ROM /
+userspace init race, not a kernel gap, so the fix is userspace-only and does
+not depend on the kernel build.
+
+  ./build_usb_fix_module.sh               # -> dist/usb-boot-fix/*.zip
+  ./build_usb_fix_module.sh --config mtp  # auto File-transfer every boot
+                                          # (convenient, small security cost)
+
+Install the ZIP from the KernelSU-Next manager (Modules -> Install from
+storage) and reboot. Its boot service waits for boot to finish and, only if
+the gadget is still unbound, replays the same restart the debugging toggle
+does, so USB data works and "File transfer" is selectable normally. Per-boot
+log: /data/adb/modules/un1ca_usb_boot_fix/usb_boot_fix.log .
+
+
+Testing the Fragnesia fix
+-------------------------
+
+tests/skb_coalesce builds a kernel module that exercises skb_try_coalesce() on
+normal input and checks that the shared-frag marker is carried over (what the
+fix adds) without being invented. Build and sign it against the same out/ that
+produced the flashed kernel, then load it on that device:
+
+  ./tests/skb_coalesce/run.sh
+  adb push tests/skb_coalesce/skb_coalesce_test.ko /data/local/tmp/
+  adb shell su -c 'insmod /data/local/tmp/skb_coalesce_test.ko; \
+                   dmesg | grep skb_coalesce_test; rmmod skb_coalesce_test'
+
+
+================================================================================
+Original kernel README below
+================================================================================
+
 Linux kernel
 ============
 
