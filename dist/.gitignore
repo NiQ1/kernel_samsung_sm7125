@@ -1,0 +1,5 @@
+# Ignore large build artifacts; keep the tiny KSU USB-fix module.
+*
+!.gitignore
+!usb-boot-fix/
+!usb-boot-fix/**

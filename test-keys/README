@@ -1,0 +1,16 @@
+AOSP public test keys, used by build_kernel.sh and patch_rom_zip.sh in place of
+signatures that cannot be reproduced. Downloaded once on 2026-10-27 from AOSP
+tag android-15.0.0_r1; these keys have not changed in years.
+
+testkey_rsa4096.pem   platform/external/avb  test/data/testkey_rsa4096.pem
+                      AVB key of the stock UN1CA boot.img footer
+                      (AVB public key sha1 2597c218aae470a130f61162feaae70afd97f011)
+testkey.pk8           platform/build  target/product/security/testkey.pk8
+testkey.x509.pem      platform/build  target/product/security/testkey.x509.pem
+                      Whole-file signature of the ROM zip (replaces UN1CA's
+                      "UNICA OTA" key, whose private half is not public)
+
+sha256:
+6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121  testkey_rsa4096.pem
+495675d32e89a149d5abe191f4e9c0e218b9068714e9b53a7c91e164a0741a23  testkey.pk8
+a4384ba815b9499a5ce349b4e33c1755278873fe2eac150a068823f526e6dbde  testkey.x509.pem
